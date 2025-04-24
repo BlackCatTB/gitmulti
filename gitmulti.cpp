@@ -5,6 +5,9 @@
 #include <map>
 #include <string>
 #include <filesystem>
+#include <sstream>  // for std::istringstream and std::getline with stringstream
+#include <unordered_map>
+
 
 #ifdef _WIN32
     #include <windows.h>
@@ -13,11 +16,6 @@
     #define HOME_ENV "HOME"
 #endif
 
-#include <iostream>
-#include <fstream>
-#include <string>
-#include <cstdlib>
-#include <unordered_map>
 
 void promptToEditConfig(const std::string& configPath) {
 #ifdef _WIN32
@@ -72,7 +70,7 @@ bool isDefaultConfig(const std::string& configPath) {
     return (
         config["remote_name"] == "uni" &&
         config["branch"] == "main" &&
-        config["default_url"] == "git@uni.example.edu:your/repo.git"
+        config["default_url"] == "git@uni.example.edu:user/"
     );
 }
 
@@ -96,13 +94,52 @@ std::map<std::string, std::string> readConfig(const std::string& path) {
     return config;
 }
 
+bool remoteExists(const std::string& remoteName) {
+    std::string command = "git remote";
+#ifdef _WIN32
+    FILE* pipe = _popen(command.c_str(), "r");
+#else
+    FILE* pipe = popen(command.c_str(), "r");
+#endif
+
+    if (!pipe) return false;
+
+    char buffer[128];
+    std::string output;
+    while (fgets(buffer, sizeof(buffer), pipe)) {
+        output += buffer;
+    }
+
+#ifdef _WIN32
+    _pclose(pipe);
+#else
+    pclose(pipe);
+#endif
+
+    // Split by newline and check for match
+    std::istringstream iss(output);
+    std::string line;
+    while (std::getline(iss, line)) {
+        if (line == remoteName) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
 void createDefaultConfig(const std::string& path) {
+    std::string repoName = std::filesystem::current_path().filename().string(); // gets the last directory in path
+
     std::ofstream file(path);
     file << "remote_name=uni\n";
     file << "branch=main\n";
-    file << "default_url=git@uni.example.edu:user/repo.git\n";
+    file << "default_url=git@uni.example.edu:user/" << repoName << "\n";
     file.close();
+
     std::cout << "[*] Created config at " << path << std::endl;
+    std::cout << "    Using repo name: " << repoName << std::endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -121,16 +158,54 @@ int main(int argc, char* argv[]) {
     auto config = readConfig(configPath);
     std::string remoteName = config["remote_name"];
     std::string branch = config["branch"];
-    std::string remoteURL = (argc > 1) ? argv[1] : config["default_url"];
+    std::string remoteURL;
+    if (argc > 1) {
+        remoteURL = argv[1];
+    } else {
+        std::string projectName = std::filesystem::current_path().filename().string();
+
+        // Use default URL root from config (like git@uni.example.edu:user/)
+        std::string baseURL = config["default_url"];
+
+        // If the default_url doesn't end with '/', assume it includes a project name to trim off
+        if (!baseURL.empty() && baseURL.back() != '/') {
+            size_t lastSlash = baseURL.find_last_of('/');
+            if (lastSlash != std::string::npos) {
+                baseURL = baseURL.substr(0, lastSlash + 1); // keep trailing slash
+            } else {
+                baseURL += '/'; // fallback to safe trailing slash
+            }
+        }
+
+        remoteURL = baseURL + projectName + ".git";
+    }
+
 
     std::cout << "[*] Using remote '" << remoteName << "' with URL: " << remoteURL << std::endl;
-
-    std::string addCmd = "git remote add " + remoteName + " " + remoteURL;
-    int result = std::system(addCmd.c_str());
-
-    if (result != 0) {
-        std::cerr << "[!] Failed to add remote. It might already exist." << std::endl;
+    
+    
+    if (!remoteExists(remoteName)) {
+        std::string addCmd = "git remote add " + remoteName + " " + remoteURL;
+        int result = std::system(addCmd.c_str());
+    
+        if (result != 0) {
+            std::cerr << "[!] Failed to add remote '" << remoteName << "'." << std::endl;
+        } else {
+            std::cout << "[+] Added remote '" << remoteName << "' successfully." << std::endl;
+        }
+    } else {
+        std::cout << "[!] Remote '" << remoteName << "' already exists. Overwriting..." << std::endl;
+        std::string setCmd = "git remote set-url " + remoteName + " " + remoteURL;
+        int result = std::system(setCmd.c_str());
+    
+        if (result != 0) {
+            std::cerr << "[!] Failed to set remote URL for '" << remoteName << "'." << std::endl;
+        } else {
+            std::cout << "[✓] Remote '" << remoteName << "' now points to: " << remoteURL << std::endl;
+        }
     }
+    
+    
 
     std::cout << "[*] Setting up push to both remotes..." << std::endl;
 
