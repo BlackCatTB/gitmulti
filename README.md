@@ -32,10 +32,11 @@ Run the provided PowerShell script to:
 Use the provided shell script:
 
 ```bash
-sudo ./install.sh
+sudo ./install-unix.sh
 ```
 
 This will install the binary to `/usr/local/bin/gitmulti`.
+And optionally install clang llvm for you on macos on request
 
 ---
 
